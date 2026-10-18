@@ -62,6 +62,13 @@ jobs:
             echo "Builder:     CALL of BLOK Windows x64 MinGW64"
             echo
             gcc --version
+            # MSYS2 MINGW64 ships plain gcc.exe/windres.exe without the
+            # target-prefixed names build_x64.bat expects; plain gcc.exe here
+            # IS the native x86_64-w64-mingw32 driver, so copies are exact.
+            cd /mingw64/bin
+            [ -f x86_64-w64-mingw32-gcc.exe ] || cp gcc.exe x86_64-w64-mingw32-gcc.exe
+            [ -f x86_64-w64-mingw32-windres.exe ] || cp windres.exe x86_64-w64-mingw32-windres.exe
+            cd - >/dev/null
             cmd //c build_x64.bat
             status=$?
             echo "$status" > build/windows-build-status.txt
