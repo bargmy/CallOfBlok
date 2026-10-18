@@ -82,12 +82,14 @@ jobs:
         run: |
           log=logs/build-windows-x64.log
           if [ ! -f "$log" ]; then echo "::error::no build log present; an earlier setup step failed"; exit 0; fi
-          grep -nE '\berror\b|\bError\b|undefined reference' "$log" | head -35 | while IFS= read -r line; do
+          grep -nE '\berror\b|\bError\b|undefined reference' "$log" | head -30 | while IFS= read -r line; do
             printf '::error::%s\n' "${line//'%'/'%25'}"
           done
-          tail -n 6 "$log" | while IFS= read -r line; do
+          echo '--- log tail ---'
+          tail -n 12 "$log" | while IFS= read -r line; do
             printf '::error::%s\n' "${line//'%'/'%25'}"
           done
+          exit 0
 
       - name: Package Windows executable
         if: env.BUILD_OK == '1'
@@ -189,12 +191,14 @@ jobs:
         run: |
           log=logs/build-linux-x64.log
           if [ ! -f "$log" ]; then echo "::error::no build log present; an earlier setup step failed"; exit 0; fi
-          grep -nE '\berror\b|\bError\b|undefined reference' "$log" | head -35 | while IFS= read -r line; do
+          grep -nE '\berror\b|\bError\b|undefined reference' "$log" | head -30 | while IFS= read -r line; do
             printf '::error::%s\n' "${line//'%'/'%25'}"
           done
-          tail -n 4 "$log" | while IFS= read -r line; do
+          echo '--- log tail ---'
+          tail -n 6 "$log" | while IFS= read -r line; do
             printf '::error::%s\n' "${line//'%'/'%25'}"
           done
+          exit 0
 
       - name: Package Linux executable
         if: env.BUILD_OK == '1'
@@ -371,6 +375,7 @@ jobs:
             fi
           done
           [ -f logs/build-android-universal.log ] || [ -f logs/android-sdk-setup.log ] || echo "::error::no android build or sdk-setup log present"
+          exit 0
 
       - name: Package Android APK
         if: env.ANDROID_BUILD_OK == '1'
