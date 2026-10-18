@@ -76,15 +76,18 @@ jobs:
           } 2>&1 | tee logs/build-windows-x64.log
           exit ${PIPESTATUS[0]}
 
-      - name: Dump failing build log to summary
+      - name: Expose failing build log as annotations
         if: always() && env.BUILD_OK != '1'
         shell: bash
         run: |
-          {
-            echo "## Windows build — log tail"
-            echo
-            tail -n 250 logs/build-windows-x64.log 2>/dev/null || echo "(no build log; an earlier setup step likely failed)"
-          } >> "$GITHUB_STEP_SUMMARY"
+          log=logs/build-windows-x64.log
+          if [ -f "$log" ]; then
+            tail -n 40 "$log" | while IFS= read -r line; do
+              printf '::error::%s\n' "${line//'%'/'%25'}"
+            done
+          else
+            echo "::error::no build log present; an earlier setup step failed"
+          fi
 
       - name: Package Windows executable
         if: env.BUILD_OK == '1'
@@ -180,15 +183,18 @@ jobs:
           } 2>&1 | tee logs/build-linux-x64.log
           exit ${PIPESTATUS[0]}
 
-      - name: Dump failing build log to summary
+      - name: Expose failing build log as annotations
         if: always() && env.BUILD_OK != '1'
         shell: bash
         run: |
-          {
-            echo "## Linux build — log tail"
-            echo
-            tail -n 250 logs/build-linux-x64.log 2>/dev/null || echo "(no build log; an earlier setup step likely failed)"
-          } >> "$GITHUB_STEP_SUMMARY"
+          log=logs/build-linux-x64.log
+          if [ -f "$log" ]; then
+            tail -n 40 "$log" | while IFS= read -r line; do
+              printf '::error::%s\n' "${line//'%'/'%25'}"
+            done
+          else
+            echo "::error::no build log present; an earlier setup step failed"
+          fi
 
       - name: Package Linux executable
         if: env.BUILD_OK == '1'
@@ -262,29 +268,34 @@ jobs:
         env:
           COB_NDK_VERSION: 27.2.12479018
         run: |
-          set -euxo pipefail
-          sudo apt-get update
-          sudo apt-get install -y curl unzip python3
-          yes | sdkmanager --licenses >/dev/null || true
+          set -u
+          mkdir -p logs build dist
+          {
+            set -ex -o pipefail
+            sudo apt-get update
+            sudo apt-get install -y curl unzip python3
+            yes | sdkmanager --licenses >/dev/null || true
 
-          rm -rf "$ANDROID_HOME/ndk/27.0.12077973" "$ANDROID_HOME/ndk/$COB_NDK_VERSION" ~/.android/cache || true
-          for attempt in 1 2 3; do
-            if sdkmanager --install \
-              "platform-tools" \
-              "platforms;android-35" \
-              "build-tools;35.0.0" \
-              "cmake;3.22.1" \
-              "ndk;$COB_NDK_VERSION"; then
-              break
-            fi
             rm -rf "$ANDROID_HOME/ndk/27.0.12077973" "$ANDROID_HOME/ndk/$COB_NDK_VERSION" ~/.android/cache || true
-            if [ "$attempt" -eq 3 ]; then exit 1; fi
-            sleep 5
-          done
+            for attempt in 1 2 3; do
+              if sdkmanager --install \
+                "platform-tools" \
+                "platforms;android-35" \
+                "build-tools;35.0.0" \
+                "cmake;3.22.1" \
+                "ndk;$COB_NDK_VERSION"; then
+                break
+              fi
+              rm -rf "$ANDROID_HOME/ndk/27.0.12077973" "$ANDROID_HOME/ndk/$COB_NDK_VERSION" ~/.android/cache || true
+              if [ "$attempt" -eq 3 ]; then exit 1; fi
+              sleep 5
+            done
 
-          test -x "$ANDROID_HOME/ndk/$COB_NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$COB_NDK_VERSION" >> "$GITHUB_ENV"
-          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$COB_NDK_VERSION" >> "$GITHUB_ENV"
+            test -x "$ANDROID_HOME/ndk/$COB_NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+            echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$COB_NDK_VERSION" >> "$GITHUB_ENV"
+            echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$COB_NDK_VERSION" >> "$GITHUB_ENV"
+          } 2>&1 | tee logs/android-sdk-setup.log
+          exit ${PIPESTATUS[0]}
 
       - name: Prepare SDL2 Android dependency
         shell: bash
@@ -339,15 +350,20 @@ jobs:
           } 2>&1 | tee logs/build-android-universal.log
           exit ${PIPESTATUS[0]}
 
-      - name: Dump failing build log to summary
+      - name: Expose failing build log as annotations
         if: always() && env.ANDROID_BUILD_OK != '1'
         shell: bash
         run: |
-          {
-            echo "## Android build — log tail"
-            echo
-            tail -n 250 logs/build-android-universal.log 2>/dev/null || echo "(no build log; an earlier SDK/setup step likely failed)"
-          } >> "$GITHUB_STEP_SUMMARY"
+          for log in logs/build-android-universal.log logs/android-sdk-setup.log; do
+            if [ -f "$log" ]; then
+              echo "---- $log (tail) ----"
+              tail -n 30 "$log" | while IFS= read -r line; do
+                printf '::error::%s\n' "${line//'%'/'%25'}"
+              done
+              break
+            fi
+          done
+          [ -f logs/build-android-universal.log ] || [ -f logs/android-sdk-setup.log ] || echo "::error::no android build or sdk-setup log present"
 
       - name: Package Android APK
         if: env.ANDROID_BUILD_OK == '1'
