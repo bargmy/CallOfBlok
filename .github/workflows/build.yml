@@ -62,12 +62,25 @@ jobs:
             echo "Builder:     CALL of BLOK Windows x64 MinGW64"
             echo
             gcc --version
+            echo "MINGW64_BIN=$MINGW64_BIN"
+            echo "msys2 shell root: $(cygpath -w / 2>/dev/null)  /mingw64/bin -> $(cygpath -w /mingw64/bin 2>/dev/null)"
             # MSYS2 MINGW64 ships plain gcc.exe/windres.exe without the
             # target-prefixed names build_x64.bat expects; plain gcc.exe here
             # IS the native x86_64-w64-mingw32 driver, so copies are exact.
-            cd /mingw64/bin
-            [ -f x86_64-w64-mingw32-gcc.exe ] || cp gcc.exe x86_64-w64-mingw32-gcc.exe
-            [ -f x86_64-w64-mingw32-windres.exe ] || cp windres.exe x86_64-w64-mingw32-windres.exe
+            # Create them in every plausible mingw64\bin on this machine.
+            for dir in /mingw64/bin /c/msys64/mingw64/bin; do
+              if [ ! -d "$dir" ]; then echo "(absent root: $dir)"; continue; fi
+              cd "$dir"
+              for t in gcc windres; do
+                if [ -f "x86_64-w64-mingw32-$t.exe" ]; then
+                  echo "  $dir: prefixed $t already present"
+                elif [ -f "$t.exe" ]; then
+                  cp -f "$t.exe" "x86_64-w64-mingw32-$t.exe" && echo "  $dir: created x86_64-w64-mingw32-$t.exe"
+                else
+                  echo "  $dir: NO plain $t.exe here"
+                fi
+              done
+            done
             cd - >/dev/null
             cmd //c build_x64.bat
             status=$?
