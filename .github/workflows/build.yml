@@ -43,10 +43,10 @@ jobs:
           install: >-
             base-devel
             mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-python
             mingw-w64-x86_64-zlib
             mingw-w64-x86_64-libogg
             mingw-w64-x86_64-libvorbis
-            python
             zip
 
       - name: Build Windows x64 client
@@ -81,13 +81,13 @@ jobs:
         shell: bash
         run: |
           log=logs/build-windows-x64.log
-          if [ -f "$log" ]; then
-            tail -n 40 "$log" | while IFS= read -r line; do
-              printf '::error::%s\n' "${line//'%'/'%25'}"
-            done
-          else
-            echo "::error::no build log present; an earlier setup step failed"
-          fi
+          if [ ! -f "$log" ]; then echo "::error::no build log present; an earlier setup step failed"; exit 0; fi
+          grep -nE '\berror\b|\bError\b|undefined reference' "$log" | head -35 | while IFS= read -r line; do
+            printf '::error::%s\n' "${line//'%'/'%25'}"
+          done
+          tail -n 6 "$log" | while IFS= read -r line; do
+            printf '::error::%s\n' "${line//'%'/'%25'}"
+          done
 
       - name: Package Windows executable
         if: env.BUILD_OK == '1'
@@ -188,13 +188,13 @@ jobs:
         shell: bash
         run: |
           log=logs/build-linux-x64.log
-          if [ -f "$log" ]; then
-            tail -n 40 "$log" | while IFS= read -r line; do
-              printf '::error::%s\n' "${line//'%'/'%25'}"
-            done
-          else
-            echo "::error::no build log present; an earlier setup step failed"
-          fi
+          if [ ! -f "$log" ]; then echo "::error::no build log present; an earlier setup step failed"; exit 0; fi
+          grep -nE '\berror\b|\bError\b|undefined reference' "$log" | head -35 | while IFS= read -r line; do
+            printf '::error::%s\n' "${line//'%'/'%25'}"
+          done
+          tail -n 4 "$log" | while IFS= read -r line; do
+            printf '::error::%s\n' "${line//'%'/'%25'}"
+          done
 
       - name: Package Linux executable
         if: env.BUILD_OK == '1'
@@ -272,6 +272,13 @@ jobs:
           mkdir -p logs build dist
           {
             set -ex -o pipefail
+            ct="$ANDROID_HOME/cmdline-tools"
+            if [ -d "$ct" ]; then
+              latest="$(ls -d "$ct"/*/ 2>/dev/null | sort -V | tail -n 1)"
+              export PATH="$latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+            fi
+            export PATH="$ANDROID_HOME/platform-tools:$PATH"
+            command -v sdkmanager >/dev/null 2>&1 || { echo "!! sdkmanager not found; ANDROID_HOME contents:"; ls "$ANDROID_HOME" 2>/dev/null; ls "$ct" 2>/dev/null; exit 1; }
             sudo apt-get update
             sudo apt-get install -y curl unzip python3
             yes | sdkmanager --licenses >/dev/null || true
