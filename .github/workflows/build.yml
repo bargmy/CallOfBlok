@@ -35,53 +35,60 @@ jobs:
           [ -n "$name" ] || name="${{ github.ref_name }}"
           echo "name=$name" >> "$GITHUB_OUTPUT"
 
-      - name: Set up MSYS2 MinGW64
-        uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            base-devel
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-python
+      - name: Install llvm-mingw toolchain
+        shell: bash
+        run: |
+          set -e
+          echo "Downloading llvm-mingw 20261006 (Windows-native, UCRT)..."
+          curl -fL --retry 3 --retry-delay 3 \
+            -o "$RUNNER_TEMP/llvm-mingw.zip" \
+            https://github.com/mstorsjo/llvm-mingw/releases/download/20261006/llvm-mingw-20261006-ucrt-x86_64.zip
+          rm -rf /c/llvm-mingw
+          mkdir -p /c/llvm-mingw
+          zipfile="$RUNNER_TEMP/llvm-mingw.zip"
+          powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -LiteralPath '$zipfile' -DestinationPath 'C:/llvm-mingw' -Force"
+          root=/c/llvm-mingw/llvm-mingw-20261006-ucrt-x86_64
+          bin=$root/bin
+          "$bin/x86_64-w64-mingw32-clang.exe" --version | head -n 2
+          # llvm-mingw ships the compiler but no vorbis/ogg/zlib; the preinstalled
+          # stub msys2's pacman provides their import libs, headers and DLLs.
+          /c/msys64/usr/bin/pacman.exe -S --noconfirm --needed \
+            mingw-w64-x86_64-libvorbis \
+            mingw-w64-x86_64-libogg \
             mingw-w64-x86_64-zlib
-            mingw-w64-x86_64-libogg
-            mingw-w64-x86_64-libvorbis
-            zip
+          sysroot=$root/x86_64-w64-mingw32
+          mkdir -p "$sysroot/lib" "$sysroot/include"
+          cp -f /c/msys64/mingw64/lib/libvorbisfile.dll.a /c/msys64/mingw64/lib/libvorbis.dll.a "$sysroot/lib/"
+          cp -f /c/msys64/mingw64/lib/libogg.dll.a /c/msys64/mingw64/lib/libz.dll.a "$sysroot/lib/"
+          cp -rf /c/msys64/mingw64/include/vorbis /c/msys64/mingw64/include/ogg "$sysroot/include/"
+          cp -f /c/msys64/mingw64/include/zlib.h /c/msys64/mingw64/include/zconf.h "$sysroot/include/"
+          echo "sysroot libs now include:"
+          ls "$sysroot/lib" | grep -E 'vorbis|ogg|^libz' || true
+          echo "MINGW64_BIN=C:\\llvm-mingw\\llvm-mingw-20261006-ucrt-x86_64\\bin" >> "$GITHUB_ENV"
 
       - name: Build Windows x64 client
-        env:
-          MINGW64_BIN: ${{ runner.temp }}\msys64\mingw64\bin
-        shell: msys2 {0}
+        shell: bash
         run: |
           set +e
           mkdir -p build logs dist
           {
             echo "Commit name: ${{ steps.commit.outputs.name }}"
             echo "Commit SHA:  $GITHUB_SHA"
-            echo "Builder:     CALL of BLOK Windows x64 MinGW64"
+            echo "Builder:     CALL of BLOK Windows x64 llvm-mingw (clang)"
             echo
-            gcc --version
-            echo "MINGW64_BIN=$MINGW64_BIN"
-            echo "msys2 shell root: $(cygpath -w / 2>/dev/null)  /mingw64/bin -> $(cygpath -w /mingw64/bin 2>/dev/null)"
-            # MSYS2 MINGW64 ships plain gcc.exe/windres.exe without the
-            # target-prefixed names build_x64.bat expects; plain gcc.exe here
-            # IS the native x86_64-w64-mingw32 driver, so copies are exact.
-            # Create them in every plausible mingw64\bin on this machine.
-            for dir in /mingw64/bin /c/msys64/mingw64/bin; do
-              if [ ! -d "$dir" ]; then echo "(absent root: $dir)"; continue; fi
-              cd "$dir"
-              for t in gcc windres; do
-                if [ -f "x86_64-w64-mingw32-$t.exe" ]; then
-                  echo "  $dir: prefixed $t already present"
-                elif [ -f "$t.exe" ]; then
-                  cp -f "$t.exe" "x86_64-w64-mingw32-$t.exe" && echo "  $dir: created x86_64-w64-mingw32-$t.exe"
-                else
-                  echo "  $dir: NO plain $t.exe here"
-                fi
-              done
+            ccbin=$(cygpath -u "$MINGW64_BIN")
+            "$ccbin/x86_64-w64-mingw32-clang.exe" --version
+            # build_x64.bat wants the target-prefixed driver names; llvm-mingw
+            # ships them natively. Verify (and fix) as a net.
+            for t in gcc windres; do
+              if [ -f "$ccbin/x86_64-w64-mingw32-$t.exe" ]; then
+                echo "  $ccbin: prefixed $t present"
+              elif [ -f "$ccbin/$t.exe" ]; then
+                cp -f "$ccbin/$t.exe" "$ccbin/x86_64-w64-mingw32-$t.exe" && echo "  $ccbin: created x86_64-w64-mingw32-$t.exe"
+              else
+                echo "  $ccbin: NO plain $t.exe"
+              fi
             done
-            cd - >/dev/null
             cmd //c build_x64.bat
             status=$?
             echo "$status" > build/windows-build-status.txt
@@ -117,12 +124,21 @@ jobs:
 
       - name: Package Windows executable
         if: env.BUILD_OK == '1'
-        shell: msys2 {0}
+        shell: bash
         run: |
           set -euxo pipefail
           package_dir="dist/cob-windows-x64"
           mkdir -p "$package_dir"
           cp -f "$BIN" "$package_dir/call_of_blok_x64.exe"
+          dll_src=/c/msys64/mingw64/bin
+          for dll in libvorbis-0.dll libvorbisfile-3.dll libogg-0.dll zlib1.dll; do
+            if [ -f "$dll_src/$dll" ]; then
+              cp -f "$dll_src/$dll" "$package_dir/"
+            else
+              echo "::error::missing runtime DLL: $dll (audio/zlib packages failed)"
+              exit 1
+            fi
+          done
           cp -f build/imported-dlls.txt "$package_dir/" || true
           cp -R logs "$package_dir/logs" || true
           cat > "$package_dir/COMMIT_NAME.txt" <<EOF
@@ -131,7 +147,7 @@ jobs:
           Builder:     CALL of BLOK Windows x64 MinGW64
           EOF
           zip_path="dist/cob-windows-x64.zip"
-          (cd "$package_dir" && zip -r "../$(basename "$zip_path")" .)
+          (cd "$package_dir" && (command -v zip >/dev/null 2>&1 && zip -r "../$(basename "$zip_path")" . || tar -a -cf "../$(basename "$zip_path")" .))
           echo "ZIP_PATH=$zip_path" >> "$GITHUB_ENV"
 
       - name: Upload release artifact
