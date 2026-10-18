@@ -1,0 +1,395 @@
+name: Build CALL of BLOK and publish GitHub release
+
+run-name: Build "${{ github.event.head_commit.message || github.ref_name }}" from bargmy/PexOfDuty
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+
+  windows_x64:
+    name: Windows x64 (MinGW)
+    runs-on: windows-latest
+
+    steps:
+      - name: Clone bargmy/PexOfDuty
+        uses: actions/checkout@v4
+        with:
+          repository: bargmy/PexOfDuty
+          ref: main
+          set-safe-directory: true
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.ref_name }}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Set up MSYS2 MinGW64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-libogg
+            mingw-w64-x86_64-libvorbis
+            python
+            zip
+
+      - name: Build Windows x64 client
+        env:
+          MINGW64_BIN: C:\msys64\mingw64\bin
+        shell: msys2 {0}
+        run: |
+          set +e
+          mkdir -p build logs dist
+          {
+            echo "Commit name: ${{ steps.commit.outputs.name }}"
+            echo "Commit SHA:  $GITHUB_SHA"
+            echo "Builder:     CALL of BLOK Windows x64 MinGW64"
+            echo
+            gcc --version
+            cmd //c build_x64.bat
+            status=$?
+            echo "$status" > build/windows-build-status.txt
+            if [ "$status" -eq 0 ] && [ -f pexcraft_x64.exe ]; then
+              objdump -p pexcraft_x64.exe | sed -n 's/^[[:space:]]*DLL Name: //p' | sort -u > build/imported-dlls.txt || true
+              echo "BIN=pexcraft_x64.exe" >> "$GITHUB_ENV"
+              echo "BUILD_OK=1" >> "$GITHUB_ENV"
+            else
+              echo "BUILD_OK=0" >> "$GITHUB_ENV"
+            fi
+            exit "$status"
+          } 2>&1 | tee logs/build-windows-x64.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Package Windows executable
+        if: env.BUILD_OK == '1'
+        shell: msys2 {0}
+        run: |
+          set -euxo pipefail
+          package_dir="dist/cob-windows-x64"
+          mkdir -p "$package_dir"
+          cp -f "$BIN" "$package_dir/call_of_blok_x64.exe"
+          cp -f build/imported-dlls.txt "$package_dir/" || true
+          cp -R logs "$package_dir/logs" || true
+          cat > "$package_dir/COMMIT_NAME.txt" <<EOF
+          Commit name: ${{ steps.commit.outputs.name }}
+          Commit SHA:  $GITHUB_SHA
+          Builder:     CALL of BLOK Windows x64 MinGW64
+          EOF
+          zip_path="dist/cob-windows-x64.zip"
+          (cd "$package_dir" && zip -r "../$(basename "$zip_path")" .)
+          echo "ZIP_PATH=$zip_path" >> "$GITHUB_ENV"
+
+      - name: Upload release artifact
+        if: env.BUILD_OK == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cob-windows-x64
+          path: dist/cob-windows-x64.zip
+          if-no-files-found: error
+
+      - name: Mark failed build in summary
+        if: always() && env.BUILD_OK != '1'
+        shell: bash
+        run: |
+          echo "### Windows x64 failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+
+  linux_x64:
+    name: Linux x64 (SDL2/OpenGL)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clone bargmy/PexOfDuty
+        uses: actions/checkout@v4
+        with:
+          repository: bargmy/PexOfDuty
+          ref: main
+          set-safe-directory: true
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.ref_name }}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Install Linux dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libsdl2-dev \
+            libsdl2-image-dev \
+            zlib1g-dev \
+            libgl1-mesa-dev \
+            libglu1-mesa-dev \
+            zip
+
+      - name: Build Linux x64 client
+        shell: bash
+        run: |
+          set +e
+          mkdir -p build logs dist
+          {
+            echo "Commit name: ${{ steps.commit.outputs.name }}"
+            echo "Commit SHA:  $GITHUB_SHA"
+            echo "Builder:     CALL of BLOK Linux SDL2/OpenGL"
+            echo
+            gcc --version
+            make -f Makefile.linux_sdl2
+            status=$?
+            echo "$status" > build/linux-build-status.txt
+            if [ "$status" -eq 0 ]; then
+              echo "BUILD_OK=1" >> "$GITHUB_ENV"
+            else
+              echo "BUILD_OK=0" >> "$GITHUB_ENV"
+            fi
+            exit "$status"
+          } 2>&1 | tee logs/build-linux-x64.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Package Linux executable
+        if: env.BUILD_OK == '1'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          package_dir="dist/cob-linux-x64"
+          mkdir -p "$package_dir"
+          cp -f pexcraft_sdl2 "$package_dir/call_of_blok_sdl2"
+          cp -R logs "$package_dir/logs" || true
+          cat > "$package_dir/COMMIT_NAME.txt" <<EOF
+          Commit name: ${{ steps.commit.outputs.name }}
+          Commit SHA:  $GITHUB_SHA
+          Builder:     CALL of BLOK Linux SDL2/OpenGL
+          EOF
+          zip_path="dist/cob-linux-x64.zip"
+          (cd "$package_dir" && zip -r "../$(basename "$zip_path")" .)
+          echo "ZIP_PATH=$zip_path" >> "$GITHUB_ENV"
+
+      - name: Upload release artifact
+        if: env.BUILD_OK == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cob-linux-x64
+          path: dist/cob-linux-x64.zip
+          if-no-files-found: error
+
+      - name: Mark failed build in summary
+        if: always() && env.BUILD_OK != '1'
+        shell: bash
+        run: |
+          echo "### Linux x64 failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+
+  android:
+    name: Android universal APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clone bargmy/PexOfDuty
+        uses: actions/checkout@v4
+        with:
+          repository: bargmy/PexOfDuty
+          ref: main
+          set-safe-directory: true
+
+      - name: Read commit name
+        id: commit
+        shell: bash
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
+          name="$(git log -1 --pretty=%s 2>/dev/null || true)"
+          [ -n "$name" ] || name="${{ github.ref_name }}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Install Android build packages
+        shell: bash
+        env:
+          COB_NDK_VERSION: 27.2.12479018
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y curl unzip python3
+          yes | sdkmanager --licenses >/dev/null || true
+
+          rm -rf "$ANDROID_HOME/ndk/27.0.12077973" "$ANDROID_HOME/ndk/$COB_NDK_VERSION" ~/.android/cache || true
+          for attempt in 1 2 3; do
+            if sdkmanager --install \
+              "platform-tools" \
+              "platforms;android-35" \
+              "build-tools;35.0.0" \
+              "cmake;3.22.1" \
+              "ndk;$COB_NDK_VERSION"; then
+              break
+            fi
+            rm -rf "$ANDROID_HOME/ndk/27.0.12077973" "$ANDROID_HOME/ndk/$COB_NDK_VERSION" ~/.android/cache || true
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep 5
+          done
+
+          test -x "$ANDROID_HOME/ndk/$COB_NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$COB_NDK_VERSION" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/$COB_NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Prepare SDL2 Android dependency
+        shell: bash
+        run: |
+          chmod +x android/*.sh || true
+          bash android/prepare_sdl2.sh
+
+      - name: Decode release signing key
+        env:
+          SIGN_BASE64: ${{ secrets.sign }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD || secrets.SIGN_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS || secrets.SIGN_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD || secrets.SIGN_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          if [ -z "${SIGN_BASE64:-}" ]; then
+            echo "No repository secret named 'sign' was provided; Gradle will produce an unsigned release APK."
+            echo "ANDROID_SIGNED=0" >> "$GITHUB_ENV"
+          else
+            mkdir -p android/app/signing
+            printf '%s' "$SIGN_BASE64" | tr -d '\r\n ' | base64 -d > android/app/signing/release.jks
+            echo "SIGNING_STORE_FILE=$PWD/android/app/signing/release.jks" >> "$GITHUB_ENV"
+            test -n "$SIGNING_STORE_PASSWORD" || { echo "SIGN_BASE64 set but SIGNING_STORE_PASSWORD is missing." >&2; exit 1; }
+            echo "ANDROID_SIGNED=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build Android universal APK
+        env:
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD || secrets.SIGN_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS || secrets.SIGN_KEY_ALIAS || 'cob_android_tv' }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD || secrets.SIGN_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set +e
+          mkdir -p build logs dist
+          {
+            echo "Commit name: ${{ steps.commit.outputs.name }}"
+            echo "Commit SHA:  $GITHUB_SHA"
+            echo "Builder:     CALL of BLOK Android universal APK"
+            echo
+            cd android
+            gradle assembleRelease
+            status=$?
+            cd ..
+            echo "$status" > build/android-build-status.txt
+            if [ "$status" -eq 0 ]; then
+              echo "ANDROID_BUILD_OK=1" >> "$GITHUB_ENV"
+            else
+              echo "ANDROID_BUILD_OK=0" >> "$GITHUB_ENV"
+            fi
+            exit "$status"
+          } 2>&1 | tee logs/build-android-universal.log
+          exit ${PIPESTATUS[0]}
+
+      - name: Package Android APK
+        if: env.ANDROID_BUILD_OK == '1'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          apk="$(find android/app/build/outputs/apk/release -type f -name '*.apk' -print -quit)"
+          test -n "$apk"
+          mkdir -p dist
+          cp -f "$apk" dist/cob-android-universal.apk
+          printf 'Commit name: %s\nCommit SHA:  %s\nBuilder:     CALL of BLOK Android universal APK\n' \
+            "${{ steps.commit.outputs.name }}" "$GITHUB_SHA" > dist/COMMIT_NAME.txt
+          echo "APK_PATH=dist/cob-android-universal.apk" >> "$GITHUB_ENV"
+
+      - name: Upload release artifact
+        if: env.ANDROID_BUILD_OK == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cob-android-universal
+          path: dist/cob-android-universal.apk
+          if-no-files-found: error
+
+      - name: Mark failed build in summary
+        if: always() && env.ANDROID_BUILD_OK != '1'
+        shell: bash
+        run: |
+          echo "### Android universal APK failed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit name: \`${{ steps.commit.outputs.name }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+
+  release:
+    name: Publish GitHub release
+    needs: [windows_x64, linux_x64, android]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Determine source commit
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          sha="$(gh api repos/bargmy/PexOfDuty/commits/main --jq '.sha')"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: release-assets
+
+      - name: Create tag name
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] && [ -n "${{ github.ref_name }}" ]; then
+            tag="${{ github.ref_name }}"
+          else
+            tag="cob-build-${{ github.run_number }}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          TITLE: CALL of BLOK ${{ steps.tag.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          notes="Built from bargmy/PexOfDuty@${{ steps.source.outputs.sha }}. Artifacts are release builds of the Windows x64, Linux x64 (SDL2/OpenGL) and Android universal clients from that commit."
+          gh release create "$TAG" ./*.zip ./*.apk \
+            --title "$TITLE" \
+            --notes "$notes"
