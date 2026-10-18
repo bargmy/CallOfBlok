@@ -80,9 +80,13 @@ jobs:
         if: always() && env.BUILD_OK != '1'
         shell: bash
         run: |
+          set +e
           log=logs/build-windows-x64.log
           if [ ! -f "$log" ]; then echo "::error::no build log present; an earlier setup step failed"; exit 0; fi
-          grep -nE '\berror\b|\bError\b|undefined reference' "$log" | head -30 | while IFS= read -r line; do
+          grep -anE 'error:|undefined reference' "$log" | head -30 | while IFS= read -r line; do
+            printf '::error::%s\n' "${line//'%'/'%25'}"
+          done
+          grep -aiE 'windres|preprocessing failed' "$log" | head -10 | while IFS= read -r line; do
             printf '::error::%s\n' "${line//'%'/'%25'}"
           done
           echo '--- log tail ---'
@@ -189,9 +193,10 @@ jobs:
         if: always() && env.BUILD_OK != '1'
         shell: bash
         run: |
+          set +e
           log=logs/build-linux-x64.log
           if [ ! -f "$log" ]; then echo "::error::no build log present; an earlier setup step failed"; exit 0; fi
-          grep -nE '\berror\b|\bError\b|undefined reference' "$log" | head -30 | while IFS= read -r line; do
+          grep -anE 'error:|undefined reference' "$log" | head -30 | while IFS= read -r line; do
             printf '::error::%s\n' "${line//'%'/'%25'}"
           done
           echo '--- log tail ---'
@@ -365,10 +370,15 @@ jobs:
         if: always() && env.ANDROID_BUILD_OK != '1'
         shell: bash
         run: |
+          set +e
           for log in logs/build-android-universal.log logs/android-sdk-setup.log; do
             if [ -f "$log" ]; then
+              echo "---- $log error lines ----"
+              grep -aE 'error:' "$log" | head -30 | while IFS= read -r line; do
+                printf '::error::%s\n' "${line//'%'/'%25'}"
+              done
               echo "---- $log (tail) ----"
-              tail -n 30 "$log" | while IFS= read -r line; do
+              tail -n 20 "$log" | while IFS= read -r line; do
                 printf '::error::%s\n' "${line//'%'/'%25'}"
               done
               break
