@@ -76,6 +76,16 @@ jobs:
           } 2>&1 | tee logs/build-windows-x64.log
           exit ${PIPESTATUS[0]}
 
+      - name: Dump failing build log to summary
+        if: always() && env.BUILD_OK != '1'
+        shell: bash
+        run: |
+          {
+            echo "## Windows build — log tail"
+            echo
+            tail -n 250 logs/build-windows-x64.log 2>/dev/null || echo "(no build log; an earlier setup step likely failed)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Package Windows executable
         if: env.BUILD_OK == '1'
         shell: msys2 {0}
@@ -170,6 +180,16 @@ jobs:
           } 2>&1 | tee logs/build-linux-x64.log
           exit ${PIPESTATUS[0]}
 
+      - name: Dump failing build log to summary
+        if: always() && env.BUILD_OK != '1'
+        shell: bash
+        run: |
+          {
+            echo "## Linux build — log tail"
+            echo
+            tail -n 250 logs/build-linux-x64.log 2>/dev/null || echo "(no build log; an earlier setup step likely failed)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Package Linux executable
         if: env.BUILD_OK == '1'
         shell: bash
@@ -231,9 +251,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -321,6 +338,16 @@ jobs:
             exit "$status"
           } 2>&1 | tee logs/build-android-universal.log
           exit ${PIPESTATUS[0]}
+
+      - name: Dump failing build log to summary
+        if: always() && env.ANDROID_BUILD_OK != '1'
+        shell: bash
+        run: |
+          {
+            echo "## Android build — log tail"
+            echo
+            tail -n 250 logs/build-android-universal.log 2>/dev/null || echo "(no build log; an earlier SDK/setup step likely failed)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Package Android APK
         if: env.ANDROID_BUILD_OK == '1'
