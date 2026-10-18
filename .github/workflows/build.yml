@@ -51,18 +51,22 @@ jobs:
           bin=$root/bin
           "$bin/x86_64-w64-mingw32-clang.exe" --version | head -n 2
           # llvm-mingw ships the compiler but no vorbis/ogg/zlib; the preinstalled
-          # stub msys2's pacman provides their import libs, headers and DLLs.
+          # stub msys2's pacman provides them. Use the UCRT64 flavor to match
+          # llvm-mingw's UCRT runtime, and place the static archives the same
+          # way the local llvm-mingw installs them (root lib/ plus sysroot).
           /c/msys64/usr/bin/pacman.exe -S --noconfirm --needed \
-            mingw-w64-x86_64-libvorbis \
-            mingw-w64-x86_64-libogg \
-            mingw-w64-x86_64-zlib
+            mingw-w64-ucrt-x86_64-libvorbis \
+            mingw-w64-ucrt-x86_64-libogg \
+            mingw-w64-ucrt-x86_64-zlib
           sysroot=$root/x86_64-w64-mingw32
-          mkdir -p "$sysroot/lib" "$sysroot/include"
-          cp -f /c/msys64/mingw64/lib/libvorbisfile.dll.a /c/msys64/mingw64/lib/libvorbis.dll.a "$sysroot/lib/"
-          cp -f /c/msys64/mingw64/lib/libogg.dll.a /c/msys64/mingw64/lib/libz.dll.a "$sysroot/lib/"
-          cp -rf /c/msys64/mingw64/include/vorbis /c/msys64/mingw64/include/ogg "$sysroot/include/"
-          cp -f /c/msys64/mingw64/include/zlib.h /c/msys64/mingw64/include/zconf.h "$sysroot/include/"
-          echo "sysroot libs now include:"
+          mkdir -p "$root/lib" "$sysroot/lib" "$sysroot/include"
+          for lib in libvorbisfile libvorbis libvorbisenc libogg libz; do
+            cp -f /c/msys64/ucrt64/lib/$lib.a "$root/lib/" || true
+            cp -f /c/msys64/ucrt64/lib/$lib.a "$sysroot/lib/" || true
+          done
+          ls "$root/lib" | grep -E 'vorbis|ogg|^libz' || true
+          cp -rf /c/msys64/ucrt64/include/vorbis /c/msys64/ucrt64/include/ogg "$sysroot/include/"
+          cp -f /c/msys64/ucrt64/include/zlib.h /c/msys64/ucrt64/include/zconf.h "$sysroot/include/"
           ls "$sysroot/lib" | grep -E 'vorbis|ogg|^libz' || true
           echo "MINGW64_BIN=C:\\llvm-mingw\\llvm-mingw-20261006-ucrt-x86_64\\bin" >> "$GITHUB_ENV"
 
@@ -93,7 +97,7 @@ jobs:
             status=$?
             echo "$status" > build/windows-build-status.txt
             if [ "$status" -eq 0 ] && [ -f pexcraft_x64.exe ]; then
-              objdump -p pexcraft_x64.exe | sed -n 's/^[[:space:]]*DLL Name: //p' | sort -u > build/imported-dlls.txt || true
+              "$ccbin/x86_64-w64-mingw32-objdump" -p pexcraft_x64.exe 2>/dev/null | sed -n 's/^[[:space:]]*DLL Name: //p' | sort -u > build/imported-dlls.txt || true
               echo "BIN=pexcraft_x64.exe" >> "$GITHUB_ENV"
               echo "BUILD_OK=1" >> "$GITHUB_ENV"
             else
@@ -130,16 +134,22 @@ jobs:
           package_dir="dist/cob-windows-x64"
           mkdir -p "$package_dir"
           cp -f "$BIN" "$package_dir/call_of_blok_x64.exe"
-          dll_src=/c/msys64/mingw64/bin
-          for dll in libvorbis-0.dll libvorbisfile-3.dll libogg-0.dll zlib1.dll; do
-            if [ -f "$dll_src/$dll" ]; then
-              cp -f "$dll_src/$dll" "$package_dir/"
-            else
-              echo "::error::missing runtime DLL: $dll (audio/zlib packages failed)"
-              exit 1
-            fi
-          done
-          cp -f build/imported-dlls.txt "$package_dir/" || true
+          # vorbis/ogg/zlib are linked statically (UCRT64 archives); the exe
+          # must not import their DLLs. Fail loudly if it still does.
+          ccbin=$(cygpath -u "$MINGW64_BIN")
+          exe_imports=""
+          if command -v strings >/dev/null 2>&1; then
+            exe_imports=$(strings -a "$package_dir/call_of_blok_x64.exe" 2>/dev/null | grep -iE '\.dll' | sort -u || true)
+          elif [ -f "$ccbin/x86_64-w64-mingw32-objdump" ]; then
+            exe_imports=$("$ccbin/x86_64-w64-mingw32-objdump" -p "$package_dir/call_of_blok_x64.exe" | sed -n 's/.*DLL Name: *//p' | sort -u || true)
+          else
+            echo "(no import-scanner available; skipping static-link verification)"
+          fi
+          echo "$exe_imports" | tee build/imported-dlls.txt || true
+          if [ -n "$exe_imports" ] && echo "$exe_imports" | grep -qiE 'vorbis|ogg-0|zlib1'; then
+            echo "::error::exe still imports vorbis/ogg/zlib DLLs; static link failed"
+            exit 1
+          fi
           cp -R logs "$package_dir/logs" || true
           cat > "$package_dir/COMMIT_NAME.txt" <<EOF
           Commit name: ${{ steps.commit.outputs.name }}
