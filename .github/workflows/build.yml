@@ -23,6 +23,7 @@ jobs:
         with:
           repository: bargmy/PexOfDuty
           ref: main
+          token: ${{ secrets.PEXOFDUTY_TOKEN || github.token }}
           set-safe-directory: true
 
       - name: Read commit name
@@ -120,6 +121,7 @@ jobs:
         with:
           repository: bargmy/PexOfDuty
           ref: main
+          token: ${{ secrets.PEXOFDUTY_TOKEN || github.token }}
           set-safe-directory: true
 
       - name: Read commit name
@@ -212,6 +214,7 @@ jobs:
         with:
           repository: bargmy/PexOfDuty
           ref: main
+          token: ${{ secrets.PEXOFDUTY_TOKEN || github.token }}
           set-safe-directory: true
 
       - name: Read commit name
