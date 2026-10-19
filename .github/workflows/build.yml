@@ -208,6 +208,7 @@ jobs:
             libsdl2-dev \
             libsdl2-image-dev \
             zlib1g-dev \
+            libssl-dev \
             libgl1-mesa-dev \
             libglu1-mesa-dev \
             zip
