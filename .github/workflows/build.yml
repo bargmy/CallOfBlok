@@ -465,7 +465,16 @@ jobs:
   release:
     name: Publish GitHub release
     needs: [windows_x64, linux_x64, android]
+    # Publish available builds even when another platform fails.
+    if: >-
+      ${{ !cancelled() &&
+          (needs.windows_x64.result == 'success' ||
+           needs.linux_x64.result == 'success' ||
+           needs.android.result == 'success') }}
     runs-on: ubuntu-latest
+    env:
+      # This job has no checkout, so gh cannot infer the destination repository.
+      GH_REPO: ${{ github.repository }}
 
     steps:
       - name: Determine source commit
@@ -503,7 +512,13 @@ jobs:
         run: |
           set -euo pipefail
           cd release-assets
-          notes="Built from bargmy/PexOfDuty@${{ steps.source.outputs.sha }}. Artifacts are release builds of the Windows x64, Linux x64 (SDL2/OpenGL) and Android universal clients from that commit."
-          gh release create "$TAG" ./*.zip ./*.apk \
+          shopt -s nullglob
+          assets=(./*.zip ./*.apk)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::No release assets were downloaded"
+            exit 1
+          fi
+          notes="Built from bargmy/PexOfDuty@${{ steps.source.outputs.sha }}. Includes available successful platform builds. Windows: ${{ needs.windows_x64.result }}; Linux: ${{ needs.linux_x64.result }}; Android: ${{ needs.android.result }}."
+          gh release create "$TAG" "${assets[@]}" \
             --title "$TITLE" \
             --notes "$notes"
