@@ -4,6 +4,11 @@ run-name: Build "${{ github.event.head_commit.message || github.ref_name }}" fro
 
 on:
   workflow_dispatch:
+    inputs:
+      build_android:
+        description: 'Build Android (temporarily disabled by default)'
+        type: boolean
+        default: false
   push:
     tags:
       - 'v*'
@@ -35,7 +40,15 @@ jobs:
           [ -n "$name" ] || name="${{ github.ref_name }}"
           echo "name=$name" >> "$GITHUB_OUTPUT"
 
+      - name: Cache llvm-mingw toolchain and static dependencies
+        id: windows-toolchain
+        uses: actions/cache@v4
+        with:
+          path: C:/llvm-mingw
+          key: windows-${{ runner.arch }}-llvm-mingw-20261006-ucrt-static-deps-v1
+
       - name: Install llvm-mingw toolchain
+        if: steps.windows-toolchain.outputs.cache-hit != 'true'
         shell: bash
         run: |
           set -e
@@ -68,6 +81,11 @@ jobs:
           cp -rf /c/msys64/ucrt64/include/vorbis /c/msys64/ucrt64/include/ogg "$sysroot/include/"
           cp -f /c/msys64/ucrt64/include/zlib.h /c/msys64/ucrt64/include/zconf.h "$sysroot/include/"
           ls "$sysroot/lib" | grep -E 'vorbis|ogg|^libz' || true
+
+      - name: Configure llvm-mingw toolchain
+        shell: bash
+        run: |
+          test -x /c/llvm-mingw/llvm-mingw-20261006-ucrt-x86_64/bin/x86_64-w64-mingw32-clang.exe
           echo "MINGW64_BIN=C:\\llvm-mingw\\llvm-mingw-20261006-ucrt-x86_64\\bin" >> "$GITHUB_ENV"
 
       - name: Build Windows x64 client
@@ -179,6 +197,11 @@ jobs:
   linux_x64:
     name: Linux x64 (SDL2/OpenGL)
     runs-on: ubuntu-latest
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPILERCHECK: content
+      CCACHE_MAXSIZE: 500M
 
     steps:
       - name: Clone bargmy/PexOfDuty
@@ -198,12 +221,22 @@ jobs:
           [ -n "$name" ] || name="${{ github.ref_name }}"
           echo "name=$name" >> "$GITHUB_OUTPUT"
 
+      - name: Cache Linux compiler outputs
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: linux-${{ runner.arch }}-ccache-v1-${{ hashFiles('Makefile.linux_sdl2', 'third_party/lua/sources.rsp') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            linux-${{ runner.arch }}-ccache-v1-${{ hashFiles('Makefile.linux_sdl2', 'third_party/lua/sources.rsp') }}-
+            linux-${{ runner.arch }}-ccache-v1-
+
       - name: Install Linux dependencies
         shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
+            ccache \
             pkg-config \
             libsdl2-dev \
             libsdl2-image-dev \
@@ -224,8 +257,10 @@ jobs:
             echo "Builder:     CALL of BLOK Linux SDL2/OpenGL"
             echo
             gcc --version
-            make -f Makefile.linux_sdl2
+            ccache --zero-stats
+            make -f Makefile.linux_sdl2 CC="ccache gcc"
             status=$?
+            ccache --show-stats
             echo "$status" > build/linux-build-status.txt
             if [ "$status" -eq 0 ]; then
               echo "BUILD_OK=1" >> "$GITHUB_ENV"
@@ -288,6 +323,8 @@ jobs:
 
   android:
     name: Android universal APK
+    # Temporarily disabled; keep the build steps for re-enabling later.
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.build_android }}
     runs-on: ubuntu-latest
 
     steps:
@@ -470,8 +507,7 @@ jobs:
     if: >-
       ${{ !cancelled() &&
           (needs.windows_x64.result == 'success' ||
-           needs.linux_x64.result == 'success' ||
-           needs.android.result == 'success') }}
+           needs.linux_x64.result == 'success') }}
     runs-on: ubuntu-latest
     env:
       # This job has no checkout, so gh cannot infer the destination repository.
@@ -519,7 +555,7 @@ jobs:
             echo "::error::No release assets were downloaded"
             exit 1
           fi
-          notes="Built from bargmy/PexOfDuty@${{ steps.source.outputs.sha }}. Includes available successful platform builds. Windows: ${{ needs.windows_x64.result }}; Linux: ${{ needs.linux_x64.result }}; Android: ${{ needs.android.result }}."
+          notes="Built from bargmy/PexOfDuty@${{ steps.source.outputs.sha }}. Includes available successful platform builds. Windows: ${{ needs.windows_x64.result }}; Linux: ${{ needs.linux_x64.result }}; Android: ${{ needs.android.result }} (disabled by default)."
           gh release create "$TAG" "${assets[@]}" \
             --title "$TITLE" \
             --notes "$notes"
