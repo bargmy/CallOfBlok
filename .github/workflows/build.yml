@@ -517,7 +517,7 @@ jobs:
       - name: Determine source commit
         id: source
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.PEXOFDUTY_TOKEN || github.token }}
         shell: bash
         run: |
           sha="$(gh api repos/bargmy/PexOfDuty/commits/main --jq '.sha')"
